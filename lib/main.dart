@@ -5,14 +5,15 @@ import 'package:flutter/services.dart';
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:uuid/uuid.dart';
 
 void main() {
   runApp(const MainApp());
 }
 
 class Tarefa {
-  late final String titulo;
-  late bool feito;
+  final String titulo;
+  bool feito;
   bool isDeleting = false;
   Timer? deletingTimer;
   bool isAnimating = false;
@@ -20,6 +21,14 @@ class Tarefa {
 
 
   Tarefa({required this.titulo, this.feito = false});
+}
+
+class ListaTarefas {
+  final List<Tarefa> tarefas;
+  final String id;
+  final String email;
+
+  ListaTarefas({required this.tarefas, required this.id, required this.email});
 }
 
 class Mensagem {
@@ -40,7 +49,7 @@ class Conversa {
 
 class RespostaChat {
   final String? pergunta;
-  final List<Tarefa>? tarefas;
+  final ListaTarefas? tarefas;
 
   RespostaChat({this.pergunta, this.tarefas});
 }
@@ -168,6 +177,46 @@ class Conexao {
     }
   }
 
+  Future<List<ListaTarefas>> getTarefasv2({String? id}) async {
+    final Uri url = Uri.https(urlBase, '/rest/tarefasv2', id != null ? {'id': 'eq.$id'} : null);
+
+    late Map<String, String> headers = {
+      'accept': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+
+    try {
+      final http.Response response = await http.get(url, headers: headers);
+
+      switch (response.statusCode) {
+        case 200:
+          final List<dynamic> data = json.decode(response.body);
+          if (data.isEmpty) {
+            return [];
+          }
+          final List<dynamic> listaDeListas = data;
+
+          return listaDeListas.map((listaTarefas) => ListaTarefas(
+            id: listaTarefas['id'],
+            email: listaTarefas['email'],
+            tarefas : (listaTarefas['valor'] as List<dynamic>)
+              .map((tarefa) => Tarefa(
+                titulo: tarefa['titulo'],
+                feito: tarefa['feito'],
+              ))
+              .toList(),
+          )).toList();
+
+        case 401:
+          throw Exception('Você não está autenticado.');
+        default:
+          throw Exception('Erro: ${response.statusCode} - ${response.body}');
+      }
+    } catch (e) {
+      throw Exception('Ocorreu um erro em pegar as tarefas: ${e.toString()}');
+    }
+  }
+
   Future<void> atualizaTarefas(List<Tarefa> tarefas) async {
     final Uri url = Uri.https(urlBase, '/rest/tarefas');
 
@@ -209,8 +258,73 @@ class Conexao {
     }
   }
 
+  Future<void> atualizaTarefasv2(ListaTarefas listaDeTarefas) async {
+    final Uri url = Uri.https(urlBase, '/rest/tarefasv2', {'id': 'eq.${listaDeTarefas.id}'});
+
+    late Map<String, String> headers = {
+      'accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+
+    final Map<String, dynamic> body = {
+      'email': email,
+      'valor': listaDeTarefas.tarefas
+          .map((tarefa) => {
+                'titulo': tarefa.titulo,
+                'feito': tarefa.feito,
+              })
+          .toList(),
+    };
+
+    final String jsonBody = json.encode(body);
+
+    try {
+      final http.Response response =
+          await http.patch(url, headers: headers, body: jsonBody);
+
+      switch (response.statusCode) {
+        case 204:
+          break;
+        case 401:
+          throw Exception('Você não está autenticado.');
+        case 403:
+          throw Exception('Você não tem permissão para acessar este recurso.');
+        default:
+          throw Exception('Erro: ${response.statusCode} - ${response.body}');
+      }
+    } catch (e) {
+      throw Exception(
+          'Ocorreu um erro em atualizar tarefas: ${e.toString().split(' ').skip(1).join(' ')}');
+    }
+  }
+
   Future<void> deletarLista() async {
     final Uri url = Uri.https(urlBase, '/rest/tarefas');
+
+    late Map<String, String> headers = {
+      'accept': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+
+    try {
+      final http.Response response = await http.delete(url, headers: headers);
+
+      switch (response.statusCode) {
+        case 204:
+          break;
+        case 401:
+          throw Exception('Você não está autenticado.');
+        default:
+          throw Exception('Erro: ${response.statusCode} - ${response.body}');
+      }
+    } catch (e) {
+      throw Exception('Ocorreu um erro em deletar lista: ${e.toString()}');
+    }
+  }
+
+  Future<void> deletarListav2(String id) async {
+    final Uri url = Uri.https(urlBase, '/rest/tarefasv2', {'id': 'eq.$id'},);
 
     late Map<String, String> headers = {
       'accept': 'application/json',
@@ -270,6 +384,45 @@ class Conexao {
     }
   }
 
+  Future<String> criaListav2() async {
+    final Uri url = Uri.https(urlBase, '/rest/tarefasv2');
+    final listaId = const Uuid().v4();
+
+    late Map<String, String> headers = {
+      'accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+
+    final Map<String, dynamic> body = {
+      'id': listaId,
+      'email': email,
+      'valor': [],
+    };
+
+    final String jsonBody = json.encode(body);
+
+    try {
+      final http.Response response =
+          await http.post(url, headers: headers, body: jsonBody);
+
+      switch (response.statusCode) {
+        case 201:
+          return listaId;
+        case 401:
+          throw Exception('Você não está autenticado.');
+        case 403:
+          throw Exception('Você não tem permissão para acessar este recurso.');
+        case 409:
+          throw Exception('Já existe uma lista para este usuário.');
+        default:
+          throw Exception('Erro: ${response.statusCode} - ${response.body}');
+      }
+    } catch (e) {
+      throw Exception('Ocorreu um erro em criar lista: ${e.toString()}');
+    }
+  }
+
   Future<String?> criarConversa() async {
     final Uri url = Uri.https(urlBase, '/rest/rpc/cria_conversa');
 
@@ -296,7 +449,7 @@ class Conexao {
 
   }
 
-  Future<List<Conversa>?> getConversas() async {
+  Future<List<Conversa>> getConversas() async {
     final Uri url = Uri.https(urlBase, '/rest/conversas');
 
     late Map<String, String> headers = {
@@ -311,7 +464,7 @@ class Conexao {
         case 200:
           final List<dynamic> lista = json.decode(response.body);
           if (lista.isEmpty) {
-            return null;
+            return [];
           }
 
           return lista
@@ -369,7 +522,14 @@ class Conexao {
           }
           final List<dynamic>? tarefas = respostaChat['tarefas'];
           if (tarefas != null) {
-            return RespostaChat(tarefas: tarefas.map((tarefa) => Tarefa(titulo: tarefa)).toList());
+            return RespostaChat(
+              tarefas: ListaTarefas(
+                email: email,
+                id: const Uuid().v4(),
+                tarefas: tarefas.map(
+                  (tarefa) => Tarefa(titulo: tarefa)).toList()
+                )
+            );
           }
           throw Exception('Resposta inválida. Nem pergunta nem tarefas encontradas.');
         case 401:
@@ -379,6 +539,30 @@ class Conexao {
       }
     } catch (e) {
       throw Exception('Ocorreu um erro em pegar a resposta do chat: ${e.toString()}');
+    }
+  }
+
+  Future<void> deletarConversa(String id) async {
+    final Uri url = Uri.https(urlBase, '/rest/conversas', {'id': 'eq.$id'},);
+
+    late Map<String, String> headers = {
+      'accept': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+
+    try {
+      final http.Response response = await http.delete(url, headers: headers);
+
+      switch (response.statusCode) {
+        case 204:
+          break;
+        case 401:
+          throw Exception('Você não está autenticado.');
+        default:
+          throw Exception('Erro: ${response.statusCode} - ${response.body}');
+      }
+    } catch (e) {
+      throw Exception('Ocorreu um erro em deletar lista: ${e.toString()}');
     }
   }
 }
@@ -412,15 +596,15 @@ class AppDrawer extends StatelessWidget {
             child: Text('Menu'),
           ),
           ListTile(
-            title: const Text('Lista de Tarefas'),
+            title: const Text('Lista de lista de Tarefas'),
             onTap: () {
               // Navegar apenas se não estiver na mesma tela
-              if (ModalRoute.of(context)?.settings.name != '/task_list') {
+              if (ModalRoute.of(context)?.settings.name != '/task_lists') {
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => TaskListScreen(conexao: conexao),
-                    settings: const RouteSettings(name: '/task_list'),
+                    builder: (context) => ListTaskListScreen(conexao: conexao),
+                    settings: const RouteSettings(name: '/task_lists'),
                   ),
                 );
               } else {
@@ -429,14 +613,14 @@ class AppDrawer extends StatelessWidget {
             },
           ),
           ListTile(
-            title: const Text('Chat'),
+            title: const Text('Lista de Chats'),
             onTap: () {
-              if (ModalRoute.of(context)?.settings.name != '/chat') {
+              if (ModalRoute.of(context)?.settings.name != '/chats') {
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => ChatScreen(conexao: conexao),
-                    settings: const RouteSettings(name: '/chat'),
+                    builder: (context) => ListChatSreen(conexao: conexao),
+                    settings: const RouteSettings(name: '/chats'),
                   ),
                 );
               } else {
@@ -465,7 +649,10 @@ class AppDrawer extends StatelessWidget {
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => ChatScreen(conexao: conexao),
+                  builder: (context) => ChatScreen(
+                    conexao: conexao,
+                    conversaId: null,
+                  ),
                   settings: const RouteSettings(name: '/chat'),
                 ),
               );
@@ -506,12 +693,15 @@ class LoginScreenState extends State<LoginScreen> {
   String? _errorMessage;
 
   void _login() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+    // if (!_formKey.currentState!.validate()) {
+    //   return;
+    // }
 
     String email = _emailController.text.trim();
     String senha = _senhaController.text.trim();
+
+    email = 'vrtaranto@gmail.com';
+    senha = 'Senha@123';
 
     Conexao conexao = Conexao();
     try {
@@ -520,7 +710,7 @@ class LoginScreenState extends State<LoginScreen> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (context) => TaskListScreen(conexao: conexao),
+            builder: (context) => ListTaskListScreen(conexao: conexao),
             settings: const RouteSettings(name: '/task_list'), // Define o nome da rota
           ),
         );
@@ -808,7 +998,7 @@ class RegistrationScreenState extends State<RegistrationScreen> {
 // Task List Screen
 class TaskListScreen extends StatefulWidget {
   final Conexao conexao;
-  final List<Tarefa>? tarefas;
+  final ListaTarefas? tarefas;
 
   const TaskListScreen({required this.conexao, super.key, this.tarefas});
 
@@ -818,7 +1008,7 @@ class TaskListScreen extends StatefulWidget {
 
 class TaskListScreenState extends State<TaskListScreen> with SingleTickerProviderStateMixin {
   final TextEditingController _controller = TextEditingController();
-  List<Tarefa> _tasks = [];
+  late ListaTarefas _tasks;
   bool _isLoading = true;
   String? _errorMessage;
   late Animation<double> animation;
@@ -840,6 +1030,7 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
       duration: const Duration(milliseconds: 500),
     );
     _loadTasks();
+    _saveTasks();
   }
 
   void _loadTasks() async {
@@ -851,16 +1042,12 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
       return;
     }
     try {
-      List<Tarefa>? tasks = await widget.conexao.getTarefas();
-      if (tasks == null) {
-        // Nenhuma tarefa encontrada, criar uma nova lista
-        await widget.conexao.criaLista();
-        tasks = [];
-      }
+      List<ListaTarefas> tasks = await widget.conexao.getTarefasv2(id: widget.tarefas?.id);
       setState(() {
-        _tasks = tasks ?? [];
+        _tasks = tasks.first;
         _isLoading = false;
       });
+      _saveTasks();
     } catch (e) {
       if (e.toString().contains('Você não está autenticado.')) {
         _showSessionExpiredDialog();
@@ -877,22 +1064,22 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
     if (input.isEmpty) return;
 
     // Verificar duplicatas
-    bool duplicate = _tasks.any((task) => task.titulo.toLowerCase() == input.toLowerCase());
+    bool duplicate = _tasks.tarefas.any((task) => task.titulo.toLowerCase() == input.toLowerCase());
     if (duplicate) return;
 
     Tarefa newTask = Tarefa(titulo: input, feito: false);
 
     setState(() {
-      _tasks.add(newTask);
+      _tasks.tarefas.add(newTask);
       _controller.clear();
     });
 
-    _listKey.currentState?.insertItem(_tasks.length - 1);
+    _listKey.currentState?.insertItem(_tasks.tarefas.length - 1);
     _saveTasks();
   }
 
   void _deleteTask(int index) {
-    Tarefa task = _tasks[index];
+    Tarefa task = _tasks.tarefas[index];
     String taskTitle = task.titulo;
 
     setState(() {
@@ -900,10 +1087,10 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
       task.deletingTimer = Timer(const Duration(seconds: 3), () {
         setState(() {
           // Encontrar o índice atual da tarefa
-          int currentIndex = _tasks.indexWhere((t) => t.titulo == taskTitle && t.isDeleting);
+          int currentIndex = _tasks.tarefas.indexWhere((t) => t.titulo == taskTitle && t.isDeleting);
           if (currentIndex != -1) {
             // Remover a tarefa da lista de dados
-            _tasks.removeAt(currentIndex);
+            _tasks.tarefas.removeAt(currentIndex);
             // Remover o item da AnimatedList
             _listKey.currentState?.removeItem(
               currentIndex,
@@ -917,7 +1104,7 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
   }
 
   void _undoDelete(int index) {
-    Tarefa task = _tasks[index];
+    Tarefa task = _tasks.tarefas[index];
 
     setState(() {
       task.isDeleting = false;
@@ -927,7 +1114,7 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
   }
 
   void _toggleCompletion(int index) async {
-    final task = _tasks[index];
+    final task = _tasks.tarefas[index];
 
     // Obter a posição atual do item
     final RenderBox? itemRenderBox = task.itemContext?.findRenderObject() as RenderBox?;
@@ -939,7 +1126,7 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
     int targetIndex;
     if (!task.feito) {
       // Tarefa sendo marcada como concluída - mover para a última posição
-      targetIndex = _tasks.length - 1;
+      targetIndex = _tasks.tarefas.length - 1;
     } else {
       // Tarefa sendo desmarcada - mover para a primeira posição
       targetIndex = 0;
@@ -956,8 +1143,8 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
 
     // Obter a posição de destino
     double targetPositionDy;
-    if (targetIndex < _tasks.length) {
-      final targetTask = _tasks[targetIndex];
+    if (targetIndex < _tasks.tarefas.length) {
+      final targetTask = _tasks.tarefas[targetIndex];
       final RenderBox? targetRenderBox = targetTask.itemContext?.findRenderObject() as RenderBox?;
       if (targetRenderBox == null) return;
       final Offset targetPosition = targetRenderBox.localToGlobal(Offset.zero);
@@ -1015,7 +1202,7 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
       task.feito = !task.feito;
 
       // Remover a tarefa da posição antiga
-      _tasks.removeAt(index);
+      _tasks.tarefas.removeAt(index);
       _listKey.currentState?.removeItem(
         index,
         (context, animation) => const SizedBox.shrink(),
@@ -1024,10 +1211,10 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
 
       // Inserir a tarefa na nova posição
       if (task.feito) {
-        _tasks.add(task);
-        _listKey.currentState?.insertItem(_tasks.length - 1, duration: const Duration(milliseconds: 0));
+        _tasks.tarefas.add(task);
+        _listKey.currentState?.insertItem(_tasks.tarefas.length - 1, duration: const Duration(milliseconds: 0));
       } else {
-        _tasks.insert(0, task);
+        _tasks.tarefas.insert(0, task);
         _listKey.currentState?.insertItem(0, duration: const Duration(milliseconds: 0));
       }
     });
@@ -1039,7 +1226,7 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
 
   void _saveTasks() async {
     try {
-      await widget.conexao.atualizaTarefas(_tasks);
+      await widget.conexao.atualizaTarefasv2(_tasks);
     } catch (e) {
       if (e.toString().contains('Você não está autenticado.')) {
         _showSessionExpiredDialog();
@@ -1079,18 +1266,18 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
   void dispose() {
     _controller.dispose();
     animationController.dispose();
-    for (var task in _tasks) {
+    for (var task in _tasks.tarefas) {
       task.deletingTimer?.cancel();
     }
     super.dispose();
   }
 
   Widget _buildTaskItem(BuildContext context, int index) {
-    if (index >= _tasks.length) {
+    if (index >= _tasks.tarefas.length) {
       // Índice inválido
       return const SizedBox.shrink();
     }
-    final task = _tasks[index];
+    final task = _tasks.tarefas[index];
 
     if (task.isAnimating) {
       // Ocultar o item original durante a animação
@@ -1261,7 +1448,12 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
   Widget build(BuildContext context) {
     return Scaffold(
         appBar: AppBar(
-          title: const Text('Lista de Tarefas'),
+          title: Row(
+            children: [
+              const Text('Lista de Tarefas'),
+              Text(widget.tarefas != null ? ' - ${widget.tarefas!.id}' : ''),
+            ],
+          ),
           centerTitle: true,
           actions: [
             IconButton(
@@ -1315,7 +1507,7 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
                                   border: Border.all(color: Colors.blue.shade200),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
-                                child: _tasks.isEmpty
+                                child: _tasks.tarefas.isEmpty
                                     ? const Center(
                                         child: Text(
                                           'Nenhuma tarefa adicionada.',
@@ -1324,7 +1516,7 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
                                       )
                                     : AnimatedList(
                                         key: _listKey,
-                                        initialItemCount: _tasks.length,
+                                        initialItemCount: _tasks.tarefas.length,
                                         itemBuilder: (context, index, animation) {
                                           return SizeTransition(
                                             sizeFactor: animation,
@@ -1350,17 +1542,154 @@ class TaskListScreenState extends State<TaskListScreen> with SingleTickerProvide
   }
 }
 
-class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.conexao});
+class ListTaskListScreen extends StatefulWidget {
+  const ListTaskListScreen({super.key, required this.conexao});
   final Conexao conexao;
 
+  @override
+  ListTaskListScreenState createState() => ListTaskListScreenState();
+}
+
+class ListTaskListScreenState extends State<ListTaskListScreen> {
+  late Future<List<ListaTarefas>> futureTarefas;
+
+  @override
+  void initState() {
+    super.initState();
+    futureTarefas = widget.conexao.getTarefasv2();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Listas de Tarefas'),
+      ),
+      drawer: AppDrawer(conexao: widget.conexao), // Usando o AppDrawer aqui
+      body: FutureBuilder<List<ListaTarefas>>(
+        future: futureTarefas,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasError) {
+            return Center(child: Text('Erro: ${snapshot.error}'));
+          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(child: Text('Nenhuma lista de tarefas encontrada.'));
+          } else {
+            final listas = snapshot.data!;
+            return ListView.builder(
+              itemCount: listas.length,
+              itemBuilder: (context, index) {
+                final lista = listas[index];
+                return ListTile(
+                  title: Text('ID: ${lista.id}'),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete),
+                    onPressed: () async {
+                      final bool? confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (BuildContext context) {
+                          return AlertDialog(
+                            title: const Text('Confirmar exclusão'),
+                            content: const Text('Deseja realmente excluir esta lista de tarefas?'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(context).pop(false),
+                                child: const Text('Cancelar'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.of(context).pop(true),
+                                child: const Text('Excluir'),
+                              ),
+                            ],
+                          );
+                        },
+                      );
+
+                      if (confirm == true) {
+                        try {
+                          await widget.conexao.deletarListav2(lista.id);
+                          setState(() {
+                            futureTarefas = widget.conexao.getTarefasv2();
+                          });
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Lista excluída com sucesso')),
+                          );
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Erro ao excluir lista: $e')),
+                          );
+                        }
+                      }
+                    },
+                  ),
+                  onTap: () {
+                    // Navegar para a tela de detalhes da lista de tarefas
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => TaskListScreen(
+                          tarefas: lista,
+                          conexao: widget.conexao,
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            );
+          }
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () async {
+          // Lógica para criar uma nova lista de tarefas
+          try {
+            final String newListId = await widget.conexao.criaListav2();
+
+            final List<ListaTarefas> newList = await widget.conexao.getTarefasv2(id: newListId);
+
+            if (!context.mounted) return;
+      
+            // Navigate to the new list
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => TaskListScreen(
+                  tarefas: newList.first,
+                  conexao: widget.conexao,
+                ),
+              ),
+            );
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Nova lista criada com ID: $newListId')),
+            );
+          } catch (e) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Erro ao criar nova lista: $e')),
+            );
+          }
+        },
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+
+class ChatScreen extends StatefulWidget {
+  const ChatScreen({super.key, required this.conexao, required this.conversaId});
+  final Conexao conexao;
+  final String? conversaId;
 
   @override
   ChatScreenState createState() => ChatScreenState();
 }
 
 class ChatScreenState extends State<ChatScreen> {
-  List<Conversa> _conversas = [];
+  late Conversa _conversa;
+  bool _isLoading = true;
   final TextEditingController _messageController = TextEditingController();
   bool _isSending = false; // Para gerenciar o estado do envio de mensagem
 
@@ -1375,46 +1704,59 @@ class ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Chat'),
+        title: Row(
+          children: [
+            const Text('Chat'),
+            const SizedBox(width: 8),
+            Text(
+              '#${_isLoading ? '...' : _conversa.id}',
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w400,
+                color: Color.fromARGB(255, 0, 0, 0),
+              ),
+            ),
+          ],
+        ),
       ),
       drawer: AppDrawer(conexao: widget.conexao),
       body: Column(
         children: [
           Expanded(
-            child: _conversas.isEmpty
-                ? const Center(child: CircularProgressIndicator())
-                : ListView.builder(
-                    itemCount: _conversas.first.mensagens.length,
-                    itemBuilder: (context, index) {
-                      final mensagem = _conversas.first.mensagens[index];
-                      final isLeft = mensagem.papel == 'usuario'; // Alinhamento
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 5.0),
-                        child: Align(
-                          alignment: isLeft
-                              ? Alignment.centerLeft
-                              : Alignment.centerRight,
-                          child: Callout(
-                            triangleSize: 20,
-                            triangleHeight: 10,
-                            backgroundColor: isLeft
-                                ? Colors.grey[300]!
-                                : Colors.blue,
-                            isLeft: isLeft,
-                            position: isLeft ? "left" : "right",
-                            child: Text(
-                              mensagem.conteudo,
-                              style: TextStyle(
-                                color: isLeft
-                                    ? Colors.black
-                                    : Colors.white,
-                              ),
-                            ),
-                          ),
+            child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : ListView.builder(
+              itemCount: _conversa.mensagens.length,
+              itemBuilder: (context, index) {
+                final mensagem = _conversa.mensagens[index];
+                final isLeft = mensagem.papel == 'usuario'; // Alinhamento
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 5.0),
+                  child: Align(
+                    alignment: isLeft
+                        ? Alignment.centerLeft
+                        : Alignment.centerRight,
+                    child: Callout(
+                      triangleSize: 20,
+                      triangleHeight: 10,
+                      backgroundColor: isLeft
+                          ? Colors.grey[300]!
+                          : Colors.blue,
+                      isLeft: isLeft,
+                      position: isLeft ? "left" : "right",
+                      child: Text(
+                        mensagem.conteudo,
+                        style: TextStyle(
+                          color: isLeft
+                              ? Colors.black
+                              : Colors.white,
                         ),
-                      );
-                    },
+                      ),
+                    ),
                   ),
+                );
+              },
+            ),
           ),
           Padding(
             padding: const EdgeInsets.all(8.0),
@@ -1447,14 +1789,18 @@ class ChatScreenState extends State<ChatScreen> {
 
   void _loadConversations() async {
     try {
-      List<Conversa>? conversas = await widget.conexao.getConversas();
-      if (conversas == null) {
+      List<Conversa> conversas = await widget.conexao.getConversas();
+      if (conversas.isEmpty) {
         // Nenhuma conversa encontrada, criar uma nova
         await widget.conexao.criarConversa();
         conversas = await widget.conexao.getConversas();
       }
+
       setState(() {
-        _conversas = conversas ?? [];
+        _conversa = widget.conversaId != null
+        ? conversas.where((c) => c.id == widget.conversaId).first
+        : conversas.first;
+        _isLoading = false;
       });
     } catch (e) {
       if (e.toString().contains('Você não está autenticado.')) {
@@ -1470,7 +1816,7 @@ class ChatScreenState extends State<ChatScreen> {
     // Adiciona a mensagem do usuário na conversa
     setState(() {
       _isSending = true;
-      _conversas.first.mensagens.add(Mensagem(
+      _conversa.mensagens.add(Mensagem(
         papel: 'usuario',
         conteudo: messageText,
       ));
@@ -1479,23 +1825,25 @@ class ChatScreenState extends State<ChatScreen> {
 
     try {
       // Chama a API para obter a resposta do chat
-      final resposta = await widget.conexao.getRespostaChat(messageText, _conversas.first.id);
+      final resposta = await widget.conexao.getRespostaChat(messageText, _conversa.id);
 
       if (resposta.pergunta != null) {
         // Adiciona a resposta como mensagem do sistema
         setState(() {
-          _conversas.first.mensagens.add(Mensagem(
+          _conversa.mensagens.add(Mensagem(
             papel: 'sistema',
             conteudo: resposta.pergunta!,
           ));
         });
       } else if (resposta.tarefas != null) {
+        String id = await widget.conexao.criaListav2();
+        ListaTarefas lista = ListaTarefas(tarefas: resposta.tarefas!.tarefas, id: id, email: widget.conexao.email);
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (context) => TaskListScreen(
               conexao: widget.conexao,
-              tarefas: resposta.tarefas,
+              tarefas: lista,
             ),
             settings: const RouteSettings(name: '/task_list'),
           ),
@@ -1536,6 +1884,113 @@ class ChatScreenState extends State<ChatScreen> {
           ],
         );
       },
+    );
+  }
+}
+
+class ListChatSreen extends StatefulWidget {
+  const ListChatSreen({super.key, required this.conexao});
+  final Conexao conexao;
+
+  @override
+  ListChatScreenState createState() => ListChatScreenState();
+}
+
+class ListChatScreenState extends State<ListChatSreen> {
+  late Future<List<Conversa>> futureConversas;
+
+  @override
+  void initState() {
+    super.initState();
+    futureConversas = widget.conexao.getConversas();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Conversas'),
+      ),
+      drawer: AppDrawer(conexao: widget.conexao),
+      body: FutureBuilder<List<Conversa>>(
+        future: futureConversas,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasError) {
+            return Center(child: Text('Erro: ${snapshot.error}'));
+          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(child: Text('Nenhuma conversa encontrada.'));
+          } else {
+            final conversas = snapshot.data!;
+            return ListView.builder(
+              itemCount: conversas.length,
+              itemBuilder: (context, index) {
+                final conversa = conversas[index];
+                return ListTile(
+                  title: Text('Conversa ID: ${conversa.id}'),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete),
+                      onPressed: () async {
+                        // Show confirmation dialog
+                        final bool? confirm = await showDialog<bool>(
+                          context: context,
+                          builder: (BuildContext context) {
+                            return AlertDialog(
+                              title: const Text('Confirmar exclusão'),
+                              content: const Text('Deseja realmente excluir esta lista de tarefas?'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(false),
+                                  child: const Text('Cancelar'),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(true),
+                                  child: const Text('Excluir'),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+
+                        if (confirm == true) {
+                          try {
+                            await widget.conexao.deletarConversa(conversas[index].id);
+                            setState(() {
+                              conversas.removeAt(index);
+                            });
+
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Chat excluído com sucesso')),
+                            );
+                          } catch (e) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Erro ao excluir chat: $e')),
+                            );
+                          }
+
+                        }
+                      },
+                    ),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => ChatScreen(
+                          conexao: widget.conexao,
+                          conversaId: conversa.id,
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            );
+          }
+        },
+      ),
     );
   }
 }
